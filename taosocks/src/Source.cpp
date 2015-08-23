@@ -154,25 +154,46 @@ namespace taosocks {
                 if (n== -1) break;
                 else if (n == 0) continue;
 
+                std::cout << "select returns " << n;
+
                 uint8_t buf[10240];
                 u_long count;
 
                 if (FD_ISSET(cfd, &rfds)) {
-                    ::ioctlsocket(cfd, FIONREAD, &count);
+                    assert(::ioctlsocket(cfd, FIONREAD, &count) == 0);
                     count = min(sizeof(buf), count);
+
+                    if (count == 0) {
+                        std::cout << ", connection closed";
+                        break;
+                    }
 
                     assert(::recv(cfd, (char*)buf, count, 0) == count);
                     assert(::send(sfd, (char*)buf, count, 0) == count);
+
+                    std::cout << "fdset set: cfd, bytes: " << count;
                 }
 
                 if (FD_ISSET(sfd, &rfds)) {
-                    ::ioctlsocket(sfd, FIONREAD, &count);
+                    assert(::ioctlsocket(sfd, FIONREAD, &count) == 0);
                     count = min(sizeof(buf), count);
+
+                    if (count == 0) {
+                        std::cout << ", connection closed";
+                        break;
+                    }
 
                     assert(::recv(sfd, (char*)buf, count, 0) == count);
                     assert(::send(cfd, (char*)buf, count, 0) == count);
+
+                    std::cout << "fdset set: sfd, bytes: " << count;
                 }
+
+                std::cout << std::endl;
             }
+
+            ::closesocket(cfd);
+            ::closesocket(sfd);
 
             return true;
         }
@@ -238,6 +259,8 @@ int main() {
     while (server.accept(&client)) {
         std::cout << "accepted...\n";
         queue.push(client);
+        //taosocks::socks_server server(client);
+        //server.run();
     }
 
     return 0;
