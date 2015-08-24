@@ -149,15 +149,13 @@ namespace taosocks {
         }
 
     public:
-        void push(taosocks::client_t& client) {
-            _lock.lock();
+        void push(taosocks::client_t client) {
             _client_queue.push(client);
             ::SetEvent(_h_event);
-            _lock.unlock();
             return;
         }
 
-        taosocks::client_t& pop() {
+        taosocks::client_t pop() {
             taosocks::client_t* p = nullptr;
 
             for (;;) {

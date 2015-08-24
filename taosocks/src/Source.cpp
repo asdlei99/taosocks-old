@@ -58,17 +58,17 @@ namespace taosocks {
             : _client(client)
             , _socket_client(nullptr)
         {
-            DWORD tid = ::GetCurrentThreadId();
-            int cfd = client.fd;
+            //DWORD tid = ::GetCurrentThreadId();
+            //int cfd = client.fd;
 
-            char buf[128];
-            sprintf(buf, "%d-%d.txt", tid, cfd);
-            _data.open(buf, std::ios::binary);
+            //char buf[128];
+            //sprintf(buf, "%d-%d.txt", tid, cfd);
+            //_data.open(buf, std::ios::binary);
         }
 
         ~socks_server()
         {
-            _data.close();
+            //_data.close();
             delete _socket_client;
         }
 
@@ -263,14 +263,15 @@ namespace taosocks {
         }
 
         void out(bool r, uint8_t* a, int b) {
+            return;
             if (b <= 0) return;
             char buf[4];
-            _data << (r ? "RD: " : "WR: ");
+            //_data << (r ? "RD: " : "WR: ");
             for (int i = 0; i < b; i++){
                 sprintf(buf, "%02X ", a[i]);
-                _data << buf;
+                //_data << buf;
             }
-            _data << "\r\n";
+            //_data << "\r\n";
         }
 
         uint8_t read_byte() {
@@ -307,7 +308,7 @@ namespace taosocks {
             return n;
         }
     protected:
-        std::ofstream   _data;
+        //std::ofstream   _data;
         socket_client*  _socket_client;
         client_t&       _client;
         std::string     _domain;
@@ -331,10 +332,11 @@ void create_worker_threads(taosocks::client_queue& queue) {
     SYSTEM_INFO si;
     ::GetSystemInfo(&si);
 
-    DWORD n_threads = si.dwNumberOfProcessors * 2;
-    //DWORD n_threads = 1;
+    DWORD n_threads = si.dwNumberOfProcessors * 10;
+
     for (int i = 0; i < (int)n_threads; i++){
         _beginthreadex(nullptr, 0, worker_thread, &queue, 0, nullptr);
+        printf("thread %d created.\n", i+1);
     }
 }
 
@@ -353,9 +355,7 @@ int main() {
     while (server.accept(&client)) {
         //std::cout << "accepted...\n";
         if (mt_mode) {
-            taosocks::client_t* p = new taosocks::client_t;
-            *p = client;
-            queue.push(*p);
+            queue.push(client);
         }
         else {
             taosocks::socks_server server(client);
