@@ -150,8 +150,10 @@ namespace taosocks {
 
     public:
         void push(taosocks::client_t& client) {
+            _lock.lock();
             _client_queue.push(client);
             ::SetEvent(_h_event);
+            _lock.unlock();
             return;
         }
 

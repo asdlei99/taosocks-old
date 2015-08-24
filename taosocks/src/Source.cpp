@@ -1,6 +1,8 @@
 #include <stdint.h>
 #include <cassert>
+#include <cstdio>
 
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -55,18 +57,34 @@ namespace taosocks {
         socks_server(client_t& client)
             : _client(client)
             , _socket_client(nullptr)
-        {}
+        {
+            DWORD tid = ::GetCurrentThreadId();
+            int cfd = client.fd;
+
+            char buf[128];
+            sprintf(buf, "%d-%d.txt", tid, cfd);
+            _data.open(buf, std::ios::binary);
+        }
 
         ~socks_server()
         {
+            _data.close();
             delete _socket_client;
         }
 
     public:
         void run() {
-            if (!auth()) return;
-            if (!request()) return;
-            if (!respond()) return;
+            try{
+                ::printf("thread_id: %10d, client fd: %10d\n", ::GetCurrentThreadId(), _client.fd);
+                auth() && request() && respond();
+            }
+            catch (const char* err){
+
+            }
+            ::closesocket(_client.fd);
+            if (_socket_client) {
+                ::closesocket(_socket_client->_fd);
+            }
         }
 
     protected:
@@ -75,13 +93,22 @@ namespace taosocks {
 
             // incoming
             c = read_byte();
-            assert(c == (uint8_t)socks_version::v5);
+            if (c != (uint8_t)socks_version::v5) {
+                uint8_t d[8];
+                for (int i = 0; i < sizeof(d); i++){
+                    d[i] = read_byte();
+                }
+                assert(0);
+            }
 
             c = read_byte();
-            assert(c == 1);
+            assert(c >= 1);
 
-            c = read_byte();
-            assert(c == (uint8_t)auth_methods::none);
+            uint8_t* p = new uint8_t[c];
+            read(_client.fd, p, c);
+
+            //c = read_byte();
+            //assert(c == (uint8_t)auth_methods::none);
 
             // outgoing
             write_byte((uint8_t)socks_version::v5);
@@ -98,30 +125,47 @@ namespace taosocks {
             assert(c == (uint8_t)socks_version::v5);
 
             c = read_byte();
-            assert(c == (uint8_t)socks_command::tcp_stream);
+            if (c != (uint8_t)socks_command::tcp_stream) {
+                assert(0);
+            }
 
             c = read_byte();
             assert(c == 0);
 
             c = read_byte();
-            assert(c == (uint8_t)addr_type::domain);
+            //assert(c == (uint8_t)addr_type::domain);
 
-            c = read_byte();
-            char* pdomain = new char[c];
-            if (::recv(_client.fd, pdomain, c, 0) != c)
-                throw "request error.";
+            std::string dom;
 
-            std::string domain(pdomain, c);
-            delete[] pdomain;
+            if (c == (uint8_t)addr_type::domain) {
+                c = read_byte();
+                char* pdomain = new char[c];
+                if (read(_client.fd, (uint8_t*)pdomain, c) != c)
+                    throw "request error.";
+
+                std::string domain(pdomain, c);
+                delete[] pdomain;
+
+                dom = domain;
+            }
+            else if (c == (uint8_t)addr_type::ipv4) {
+                uint8_t ips[4];
+                read(_client.fd, ips, 4);
+
+                char buf[128];
+                sprintf(buf, "%d.%d.%d.%d", ips[0], ips[1], ips[2], ips[3]);
+
+                dom = buf;
+            }
 
             uint16_t net_port;
-            if (::recv(_client.fd, (char*)&net_port, 2, 0) != 2)
+            if (read(_client.fd, (uint8_t*)&net_port, 2) != 2)
                 throw "request error.";
 
-            _domain = domain;
+            _domain = dom;
             _port = ntohs(net_port);
 
-            std::string ip = resolve(domain.c_str());
+            std::string ip = resolve(dom.c_str());
             in_addr addr;
             addr.S_un.S_addr = ::inet_addr(ip.c_str());
 
@@ -132,8 +176,9 @@ namespace taosocks {
             write_byte((uint8_t)request_status::granted);
             write_byte(0);
             write_byte((uint8_t)addr_type::ipv4);
-            ::send(_client.fd, (char*)&addr.S_un.S_addr, 4, 0);
-            ::send(_client.fd, (char*)&net_port, 2, 0);
+
+            write(_client.fd, (uint8_t*)&addr.S_un.S_addr, 4);
+            write(_client.fd, (uint8_t*)&net_port, 2);
 
             return true;
         }
@@ -141,6 +186,8 @@ namespace taosocks {
         bool respond() {
             SOCKET cfd = _client.fd;
             SOCKET sfd = _socket_client->_fd;
+
+            int r;
 
             int n;
             for (;;) {
@@ -154,67 +201,113 @@ namespace taosocks {
                 if (n== -1) break;
                 else if (n == 0) continue;
 
-                std::cout << "select returns " << n;
+                //std::cout << "select returns " << n;
 
                 uint8_t buf[10240];
                 u_long count;
 
                 if (FD_ISSET(cfd, &rfds)) {
-                    assert(::ioctlsocket(cfd, FIONREAD, &count) == 0);
-                    count = min(sizeof(buf), count);
-
-                    if (count == 0) {
-                        std::cout << ", connection closed";
+                    r = ::ioctlsocket(cfd, FIONREAD, &count);
+                    if (r == -1) {
+                        //std::cout << ", ioctlsocket returns -1, WSAGetLastERror() == " << ::WSAGetLastError();
                         break;
                     }
+                    assert(r == 0);
 
-                    assert(::recv(cfd, (char*)buf, count, 0) == count);
-                    assert(::send(sfd, (char*)buf, count, 0) == count);
+                    count = min(sizeof(buf), count);
 
-                    std::cout << "fdset set: cfd, bytes: " << count;
+                    //if (count > 0)
+                    //std::cout << ", fdset set: cfd, bytes: " << count;
+
+                    if (count == 0) {
+                        ::Sleep(500);
+                        break;
+                        continue;
+                    }
+
+                    r = read(cfd, buf, count);
+                    if (r == 0 || r == -1) break;
+                    assert(write(sfd, buf, count) == count);
                 }
 
                 if (FD_ISSET(sfd, &rfds)) {
-                    assert(::ioctlsocket(sfd, FIONREAD, &count) == 0);
-                    count = min(sizeof(buf), count);
-
-                    if (count == 0) {
-                        std::cout << ", connection closed";
+                    r = ::ioctlsocket(sfd, FIONREAD, &count);
+                    if (r == -1) {
+                        //std::cout << ", ioctlsocket returns -1, WSAGetLastERror() == " << ::WSAGetLastError();
                         break;
                     }
 
-                    assert(::recv(sfd, (char*)buf, count, 0) == count);
-                    assert(::send(cfd, (char*)buf, count, 0) == count);
+                    assert(r == 0);
 
-                    std::cout << "fdset set: sfd, bytes: " << count;
+                    count = min(sizeof(buf), count);
+
+                    //if (count > 0)
+                    //std::cout << ", fdset set: sfd, bytes: " << count;
+
+                    if (count == 0) {
+                        ::Sleep(500);
+                        break;
+                        continue;
+                    }
+
+                    r = read(sfd, buf, count);
+                    if (r == 0 || r == -1) break;
+                    assert(write(cfd, buf, count) == count);
                 }
-
-                std::cout << std::endl;
             }
-
+            
             ::closesocket(cfd);
             ::closesocket(sfd);
 
             return true;
         }
 
+        void out(bool r, uint8_t* a, int b) {
+            if (b <= 0) return;
+            char buf[4];
+            _data << (r ? "RD: " : "WR: ");
+            for (int i = 0; i < b; i++){
+                sprintf(buf, "%02X ", a[i]);
+                _data << buf;
+            }
+            _data << "\r\n";
+        }
+
         uint8_t read_byte() {
             uint8_t c;
             if (::recv(_client.fd, (char*)&c, 1, 0) == 1) {
+                out(true, &c, 1);
                 return c;
             }
             else{
+                int r = ::WSAGetLastError();
+                //assert(0);
                 throw "read_byte error.";
             }
         }
 
         bool write_byte(uint8_t c) {
-            if (::send(_client.fd, (char*)&c, 1, 0) == 1)
+            if (::send(_client.fd, (char*)&c, 1, 0) == 1) {
+                out(false, &c, 1);
                 return true;
+            }
             else
                 throw "write_byte error.";
         }
+
+        int read(SOCKET fd, uint8_t* buf, int len) {
+            int n = ::recv(fd, (char*)buf, len, 0);
+            out(true, buf, n);
+            return n;
+        }
+
+        int write(SOCKET fd, uint8_t* buf, int len) {
+            int n = ::send(fd, (char*)buf, len, 0);
+            out(false, buf, len);
+            return n;
+        }
     protected:
+        std::ofstream   _data;
         socket_client*  _socket_client;
         client_t&       _client;
         std::string     _domain;
@@ -227,7 +320,6 @@ unsigned int __stdcall worker_thread(void* ud) {
     taosocks::client_t* c = nullptr;
 
     while (c = &queue.pop()) {
-        std::cout << "serving...\n";
         taosocks::socks_server server(*c);
         server.run();
     }
@@ -240,27 +332,35 @@ void create_worker_threads(taosocks::client_queue& queue) {
     ::GetSystemInfo(&si);
 
     DWORD n_threads = si.dwNumberOfProcessors * 2;
+    //DWORD n_threads = 1;
     for (int i = 0; i < (int)n_threads; i++){
         _beginthreadex(nullptr, 0, worker_thread, &queue, 0, nullptr);
     }
 }
 
 int main() {
+    const int mt_mode = 1;
 
     taosocks::win_sock wsa;
 
     taosocks::client_queue queue;
-    taosocks::socket_server server("127.0.0.1", 1080, 1);
+    taosocks::socket_server server("127.0.0.1", 1080, 128);
     server.start();
 
     create_worker_threads(queue);
 
     taosocks::client_t client;
     while (server.accept(&client)) {
-        std::cout << "accepted...\n";
-        queue.push(client);
-        //taosocks::socks_server server(client);
-        //server.run();
+        //std::cout << "accepted...\n";
+        if (mt_mode) {
+            taosocks::client_t* p = new taosocks::client_t;
+            *p = client;
+            queue.push(*p);
+        }
+        else {
+            taosocks::socks_server server(client);
+            server.run();
+        }
     }
 
     return 0;
