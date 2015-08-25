@@ -75,7 +75,6 @@ namespace taosocks {
     public:
         void run() {
             try{
-                ::printf("thread_id: %10d, client fd: %10d\n", ::GetCurrentThreadId(), _client.fd);
                 auth() && request() && respond();
             }
             catch (const char* err){
@@ -107,9 +106,6 @@ namespace taosocks {
             uint8_t* p = new uint8_t[c];
             read(_client.fd, p, c);
 
-            //c = read_byte();
-            //assert(c == (uint8_t)auth_methods::none);
-
             // outgoing
             write_byte((uint8_t)socks_version::v5);
 
@@ -133,7 +129,6 @@ namespace taosocks {
             assert(c == 0);
 
             c = read_byte();
-            //assert(c == (uint8_t)addr_type::domain);
 
             std::string dom;
 
@@ -179,6 +174,8 @@ namespace taosocks {
 
             write(_client.fd, (uint8_t*)&addr.S_un.S_addr, 4);
             write(_client.fd, (uint8_t*)&net_port, 2);
+			
+			::printf("Connected to %s\n", _domain.c_str());
 
             return true;
         }
@@ -201,23 +198,17 @@ namespace taosocks {
                 if (n== -1) break;
                 else if (n == 0) continue;
 
-                //std::cout << "select returns " << n;
-
                 uint8_t buf[10240];
                 u_long count;
 
                 if (FD_ISSET(cfd, &rfds)) {
                     r = ::ioctlsocket(cfd, FIONREAD, &count);
                     if (r == -1) {
-                        //std::cout << ", ioctlsocket returns -1, WSAGetLastERror() == " << ::WSAGetLastError();
                         break;
                     }
                     assert(r == 0);
 
                     count = min(sizeof(buf), count);
-
-                    //if (count > 0)
-                    //std::cout << ", fdset set: cfd, bytes: " << count;
 
                     if (count == 0) {
                         ::Sleep(500);
@@ -233,16 +224,12 @@ namespace taosocks {
                 if (FD_ISSET(sfd, &rfds)) {
                     r = ::ioctlsocket(sfd, FIONREAD, &count);
                     if (r == -1) {
-                        //std::cout << ", ioctlsocket returns -1, WSAGetLastERror() == " << ::WSAGetLastError();
                         break;
                     }
 
                     assert(r == 0);
 
                     count = min(sizeof(buf), count);
-
-                    //if (count > 0)
-                    //std::cout << ", fdset set: sfd, bytes: " << count;
 
                     if (count == 0) {
                         ::Sleep(500);
@@ -258,6 +245,8 @@ namespace taosocks {
             
             ::closesocket(cfd);
             ::closesocket(sfd);
+			
+			::printf("Closed connection to %s\n", _domain.c_str());
 
             return true;
         }
@@ -308,7 +297,6 @@ namespace taosocks {
             return n;
         }
     protected:
-        //std::ofstream   _data;
         socket_client*  _socket_client;
         client_t&       _client;
         std::string     _domain;
@@ -341,8 +329,6 @@ void create_worker_threads(taosocks::client_queue& queue) {
 }
 
 int main() {
-    const int mt_mode = 1;
-
     taosocks::win_sock wsa;
 
     taosocks::client_queue queue;
@@ -353,14 +339,7 @@ int main() {
 
     taosocks::client_t client;
     while (server.accept(&client)) {
-        //std::cout << "accepted...\n";
-        if (mt_mode) {
-            queue.push(client);
-        }
-        else {
-            taosocks::socks_server server(client);
-            server.run();
-        }
+        queue.push(client);
     }
 
     return 0;
