@@ -235,18 +235,17 @@ namespace taosocks {
     class client_queue {
     public:
         client_queue() {
-            _h_event = ::CreateEvent(nullptr, FALSE, FALSE, nullptr);
+            _event.init(false, false);
         }
 
         ~client_queue() {
-            ::CloseHandle(_h_event);
-            _h_event = nullptr;
+            _event.uninit();
         }
 
     public:
         void push(taosocks::client_t client) {
             _client_queue.push(client);
-            ::SetEvent(_h_event);
+            _event.set();
             return;
         }
 
@@ -255,7 +254,7 @@ namespace taosocks {
 
             for (;;) {
                 if (!size()) {
-                    ::WaitForSingleObject(_h_event, INFINITE);
+                    _event.wait();
                 }
 
                 if (!_lock.try_lock())
@@ -282,8 +281,8 @@ namespace taosocks {
         }
 
     protected:
-        taosocks::locker                _lock;
+        taosocks::locker_t              _lock;
         std::queue<taosocks::client_t>  _client_queue;
-        HANDLE                          _h_event;
+        event_t                         _event;
     };
 }
